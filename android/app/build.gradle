@@ -8,7 +8,8 @@ plugins {
 android {
     namespace = "com.example.fwknop"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // shared_preferences_android requires this; NDKs are backward compatible
+    ndkVersion = "25.1.8937393"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
