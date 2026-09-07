@@ -10,6 +10,7 @@ class Profile {
   String key; // base64 (or raw, see rawKey)
   bool useHmac;
   String hmacKey;
+  String hmacDigest; // md5|sha1|sha256|sha384|sha512
   bool rawKey; // keys are ASCII instead of base64
   bool autoSource; // resolve external IP instead of using sourceIp
   String sourceIp;
@@ -25,6 +26,7 @@ class Profile {
     this.key = '',
     this.useHmac = false,
     this.hmacKey = '',
+    this.hmacDigest = 'sha256',
     this.rawKey = false,
     this.autoSource = true,
     this.sourceIp = '',
@@ -41,6 +43,7 @@ class Profile {
         'key': key,
         'useHmac': useHmac,
         'hmacKey': hmacKey,
+        'hmacDigest': hmacDigest,
         'rawKey': rawKey,
         'autoSource': autoSource,
         'sourceIp': sourceIp,
@@ -57,6 +60,7 @@ class Profile {
         key: j['key'] as String? ?? '',
         useHmac: j['useHmac'] as bool? ?? false,
         hmacKey: j['hmacKey'] as String? ?? '',
+        hmacDigest: j['hmacDigest'] as String? ?? 'sha256',
         rawKey: j['rawKey'] as bool? ?? false,
         autoSource: j['autoSource'] as bool? ?? true,
         sourceIp: j['sourceIp'] as String? ?? '',

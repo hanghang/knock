@@ -52,6 +52,7 @@ Future<void> sendSpa(Profile p) async {
     natAccess: p.natAccess.trim(),
     clientTimeout: p.timeout,
     hmacKey: hmac,
+    hmacDigest: p.hmacDigest,
   );
 
   final addr = (await InternetAddress.lookup(p.host.trim())).first;
@@ -166,6 +167,7 @@ class ProfileEditPage extends StatefulWidget {
 class _ProfileEditPageState extends State<ProfileEditPage> {
   final _form = GlobalKey<FormState>();
   late final Profile _p;
+  final _revealed = <String>{}; // key fields currently shown in clear
 
   late final _name = TextEditingController(text: _p.name);
   late final _host = TextEditingController(text: _p.host);
@@ -222,19 +224,34 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
   Widget _field(String label, TextEditingController c,
           {String? hint, bool required = false, bool obscure = false,
-          TextInputType type = TextInputType.text}) =>
-      Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: TextFormField(
-          controller: c,
-          obscureText: obscure,
-          keyboardType: type,
-          decoration: InputDecoration(labelText: label, hintText: hint, border: const OutlineInputBorder()),
-          validator: required
-              ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
-              : null,
+          TextInputType type = TextInputType.text, String? toggleKey}) {
+    final hidden = obscure && !_revealed.contains(toggleKey);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextFormField(
+        controller: c,
+        obscureText: hidden,
+        keyboardType: type,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          border: const OutlineInputBorder(),
+          suffixIcon: toggleKey == null
+              ? null
+              : IconButton(
+                  icon: Icon(hidden ? Icons.visibility : Icons.visibility_off),
+                  tooltip: hidden ? 'Show key' : 'Hide key',
+                  onPressed: () => setState(() => hidden
+                      ? _revealed.add(toggleKey)
+                      : _revealed.remove(toggleKey)),
+                ),
         ),
-      );
+        validator: required
+            ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
+            : null,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -253,7 +270,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
               _field('Server (IP or hostname)', _host, required: true),
               _field('UDP port', _port, type: TextInputType.number, required: true),
               _field('Access request', _access, hint: 'tcp/22', required: true),
-              _field('Key (base64, like access.conf KEY)', _key, obscure: true, required: true),
+              _field('Key (base64, like access.conf KEY)', _key, obscure: true, required: true, toggleKey: 'key'),
               SwitchListTile(
                 title: const Text('Use HMAC'),
                 subtitle: const Text('Recommended; needs HMAC_KEY in access.conf'),
@@ -261,7 +278,23 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                 onChanged: (v) => setState(() => _p.useHmac = v),
               ),
               if (_p.useHmac)
-                _field('HMAC key (base64)', _hmacKey, obscure: true, required: true),
+                _field('HMAC key (base64)', _hmacKey, obscure: true, required: true, toggleKey: 'hmacKey'),
+              if (_p.useHmac)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: DropdownButtonFormField<String>(
+                    value: _p.hmacDigest,
+                    decoration: const InputDecoration(
+                      labelText: 'HMAC digest type',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      for (final t in hmacDigestTypes)
+                        DropdownMenuItem(value: t, child: Text(t.toUpperCase())),
+                    ],
+                    onChanged: (v) => setState(() => _p.hmacDigest = v ?? 'sha256'),
+                  ),
+                ),
               SwitchListTile(
                 title: const Text('Keys are raw ASCII'),
                 subtitle: const Text('Off = base64 (fwknop default)'),

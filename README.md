@@ -21,7 +21,8 @@ No reply comes back by design — check that you can now connect, or watch
 (`fko_encode.c`/`fko_encryption.c`/`fko_hmac.c`/`cipher_funcs.c` from
 https://github.com/mrash/fwknop): AES in OpenSSL-compatible CBC mode
 (EVP_BytesToKey/MD5 salt+IV derivation, `Salted__` prefix), SHA256 digest,
-optional encrypt-then-MAC HMAC, wire format with the constant `U2FsdGVkX1`
+optional encrypt-then-MAC HMAC (md5/sha1/sha256/sha384/sha512, like
+`fwknop --hmac-digest-type`), wire format with the constant `U2FsdGVkX1`
 prefix stripped.
 
 Verified against the real toolchain (`flutter test`):

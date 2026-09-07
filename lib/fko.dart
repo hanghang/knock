@@ -77,11 +77,25 @@ Uint8List _aesEncrypt(List<int> plain, List<int> key, List<int> salt) {
       .toBytes();
 }
 
+/// HMAC digest algorithms supported by `fwknop --hmac-digest-type`.
+const hmacDigestTypes = ['md5', 'sha1', 'sha256', 'sha384', 'sha512'];
+
+Hash _hmacHash(String type) => switch (type) {
+      'md5' => md5,
+      'sha1' => sha1,
+      'sha256' => sha256,
+      'sha384' => sha384,
+      'sha512' => sha512,
+      _ => throw ArgumentError('unsupported hmac digest type: $type'),
+    };
+
 /// Build the final SPA packet string (base64 ciphertext [+ base64 HMAC]).
 ///
 /// [accessRequest] is e.g. `tcp/22` or `none/0`.
 /// [natAccess] is e.g. `192.168.1.10,22` (optional).
 /// [clientTimeout] > 0 requests a server-side firewall timeout (seconds).
+/// [hmacDigest] selects the HMAC algorithm (default sha256, see
+/// [hmacDigestTypes]).
 String buildSpaPacket({
   required String sourceIp,
   required String accessRequest,
@@ -90,6 +104,7 @@ String buildSpaPacket({
   String natAccess = '',
   int clientTimeout = 0,
   Uint8List? hmacKey,
+  String hmacDigest = 'sha256',
   DateTime? now,
 }) {
   final rng = Random.secure();
@@ -125,7 +140,7 @@ String buildSpaPacket({
   // The HMAC covers the full string, prefix included.
   var packet = full.substring(b64RijndaelSaltLen);
   if (hmacKey != null) {
-    final mac = Hmac(sha256, hmacKey).convert(utf8.encode(full)).bytes;
+    final mac = Hmac(_hmacHash(hmacDigest), hmacKey).convert(utf8.encode(full)).bytes;
     packet += b64(mac);
   }
   return packet;

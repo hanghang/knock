@@ -22,14 +22,17 @@ Uint8List _kiv(List<int> key, List<int> salt) {
 }
 
 /// Minimal inverse of buildSpaPacket, for verification only.
-Map<String, String> decodePacket(String packet, Uint8List key, {Uint8List? hmacKey}) {
+Map<String, String> decodePacket(String packet, Uint8List key,
+    {Uint8List? hmacKey, Hash hmacHash = sha256}) {
   var msg = packet;
   if (hmacKey != null) {
-    final macStr = packet.substring(packet.length - 43); // b64(sha256) w/o pad
-    msg = packet.substring(0, packet.length - 43);
+    // stripped-b64 length of the digest
+    final macLen = b64(Hmac(hmacHash, hmacKey).convert([0]).bytes).length;
+    final macStr = packet.substring(packet.length - macLen);
+    msg = packet.substring(0, packet.length - macLen);
     // HMAC covers the ciphertext b64 with the stripped salt prefix re-added.
     final want = b64(
-        Hmac(sha256, hmacKey).convert(utf8.encode(b64RijndaelSalt + msg)).bytes);
+        Hmac(hmacHash, hmacKey).convert(utf8.encode(b64RijndaelSalt + msg)).bytes);
     if (want != macStr) throw const FormatException('HMAC mismatch');
   }
 
@@ -79,23 +82,32 @@ void main() {
   final key = decodeKey(base64Encode(utf8.encode('0123456789abcdef01234567')));
   final hmacKey = decodeKey(base64Encode(utf8.encode('abcdefghijklmnopqrstuvwxyz012345')));
 
-  test('round-trip: access + hmac + timeout', () {
-    final packet = buildSpaPacket(
-      sourceIp: '9.9.9.9',
-      accessRequest: 'tcp/22',
-      key: key,
-      hmacKey: hmacKey,
-      clientTimeout: 300,
-      username: 'testuser',
-    );
-    expect(packet.contains('='), isFalse);
-    final d = decodePacket(packet, key, hmacKey: hmacKey);
-    expect(d['username'], 'testuser');
-    expect(d['version'], '3.0.0');
-    expect(d['type'], '3'); // CLIENT_TIMEOUT_ACCESS_MSG
-    expect(d['message'], '9.9.9.9,tcp/22');
-    expect(d['timeout'], '300');
-    expect(d['rand'], matches(RegExp(r'^\d{16}$')));
+  const hashes = {
+    'md5': md5, 'sha1': sha1, 'sha256': sha256,
+    'sha384': sha384, 'sha512': sha512,
+  };
+
+  test('round-trip: access + hmac + timeout (all digest types)', () {
+    for (final entry in hashes.entries) {
+      final packet = buildSpaPacket(
+        sourceIp: '9.9.9.9',
+        accessRequest: 'tcp/22',
+        key: key,
+        hmacKey: hmacKey,
+        hmacDigest: entry.key,
+        clientTimeout: 300,
+        username: 'testuser',
+      );
+      expect(packet.contains('='), isFalse);
+      final d = decodePacket(packet, key,
+          hmacKey: hmacKey, hmacHash: entry.value);
+      expect(d['username'], 'testuser');
+      expect(d['version'], '3.0.0');
+      expect(d['type'], '3'); // CLIENT_TIMEOUT_ACCESS_MSG
+      expect(d['message'], '9.9.9.9,tcp/22');
+      expect(d['timeout'], '300');
+      expect(d['rand'], matches(RegExp(r'^\d{16}$')));
+    }
   });
 
   test('round-trip: nat access, no hmac', () {
@@ -131,21 +143,25 @@ void main() {
 
     final keyB64 = base64Encode(utf8.encode('0123456789abcdef01234567'));
     final hmacB64 = base64Encode(utf8.encode('abcdefghijklmnopqrstuvwxyz012345'));
-    final out = '${Directory.systemTemp.path}/fko_test.spa';
-    final res = Process.runSync(exe, [
-      '-A', 'tcp/22', '-a', '9.9.9.9', '-U', 'testuser', '-f', '300',
-      '--key-base64-rijndael', keyB64, '--use-hmac', '--key-base64-hmac', hmacB64,
-      '-D', '127.0.0.1', '-T', '-B', out, '--no-save-args', '--no-rc-file',
-    ]);
-    expect(res.exitCode, 0, reason: res.stderr.toString());
+    for (final entry in hashes.entries) {
+      final out = '${Directory.systemTemp.path}/fko_test.spa';
+      final res = Process.runSync(exe, [
+        '-A', 'tcp/22', '-a', '9.9.9.9', '-U', 'testuser', '-f', '300',
+        '--key-base64-rijndael', keyB64, '--use-hmac', '--key-base64-hmac', hmacB64,
+        '--hmac-digest-type', entry.key,
+        '-D', '127.0.0.1', '-T', '-B', out, '--no-save-args', '--no-rc-file',
+      ]);
+      expect(res.exitCode, 0, reason: res.stderr.toString());
 
-    final packet = File(out).readAsStringSync().trim();
-    final d = decodePacket(packet, key, hmacKey: hmacKey);
-    expect(d['username'], 'testuser');
-    expect(d['version'], '3.0.0');
-    expect(d['type'], '3');
-    expect(d['message'], '9.9.9.9,tcp/22');
-    expect(d['timeout'], '300');
-    File(out).deleteSync();
+      final packet = File(out).readAsStringSync().trim();
+      final d = decodePacket(packet, key,
+          hmacKey: hmacKey, hmacHash: entry.value);
+      expect(d['username'], 'testuser');
+      expect(d['version'], '3.0.0');
+      expect(d['type'], '3');
+      expect(d['message'], '9.9.9.9,tcp/22');
+      expect(d['timeout'], '300');
+      File(out).deleteSync();
+    }
   });
 }
