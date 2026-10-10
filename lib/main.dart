@@ -103,6 +103,24 @@ class _ProfileListPageState extends State<ProfileListPage> {
     }
   }
 
+  // docs/features.md: long-press item -> popup menu -> duplicate profile
+  void _showItemMenu(Offset globalPos, Profile p) {
+    final size = MediaQuery.of(context).size;
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(globalPos.dx, globalPos.dy,
+          size.width - globalPos.dx, size.height - globalPos.dy),
+      items: const [
+        PopupMenuItem(value: 'duplicate', child: Text('Duplicate')),
+      ],
+    ).then((v) {
+      if (v != 'duplicate') return;
+      final copy = Profile.fromJson(p.toJson())..name = '${p.name} (copy)';
+      setState(() => _profiles.insert(_profiles.indexOf(p) + 1, copy));
+      saveProfiles(_profiles);
+    });
+  }
+
   Future<void> _edit(Profile? profile) async {
     final result = await Navigator.push<Profile>(
       context,
@@ -140,14 +158,19 @@ class _ProfileListPageState extends State<ProfileListPage> {
                           setState(() => _profiles.removeAt(i));
                           saveProfiles(_profiles);
                         },
-                        child: ListTile(
-                          title: Text(p.name),
-                          subtitle: Text('${p.host}:${p.port} · ${p.access}'),
-                          onTap: () => _edit(p),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.send),
-                            tooltip: 'Send SPA packet',
-                            onPressed: () => _send(p),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onLongPressStart: (d) =>
+                              _showItemMenu(d.globalPosition, p),
+                          child: ListTile(
+                            title: Text(p.name),
+                            subtitle: Text('${p.host}:${p.port} · ${p.access}'),
+                            onTap: () => _edit(p),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.send),
+                              tooltip: 'Send SPA packet',
+                              onPressed: () => _send(p),
+                            ),
                           ),
                         ),
                       );

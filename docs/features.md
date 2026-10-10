@@ -1,0 +1,1 @@
+ - when long press an item in list view, popup a menu let user to duplicate selected profile
