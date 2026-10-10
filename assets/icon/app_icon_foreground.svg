@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="shield" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C9E7E2"/>
+    </linearGradient>
+
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <g fill="#000">
+        <circle cx="512" cy="450" r="76"/>
+        <path d="M464 500H560L590 650A20 20 0 0 1 570 674H454A20 20 0 0 1 434 650Z"/>
+      </g>
+    </mask>
+
+    <g id="glyph" mask="url(#cut)">
+      <path d="M512 194 782 288V500C782 660 674 768 512 838 350 768 242 660 242 500V288Z"
+            fill="url(#shield)"/>
+    </g>
+  </defs>
+
+  <use href="#glyph" transform="translate(512 512) scale(0.86) translate(-512 -512)"/>
+</svg>
