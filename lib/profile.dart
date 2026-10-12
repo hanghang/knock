@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class Profile {
@@ -11,7 +12,8 @@ class Profile {
   bool useHmac;
   String hmacKey;
   String hmacDigest; // md5|sha1|sha256|sha384|sha512
-  bool rawKey; // keys are ASCII instead of base64
+  bool rawKey; // encryption key is ASCII instead of base64
+  bool rawHmacKey; // HMAC key is ASCII instead of base64
   bool autoSource; // resolve external IP instead of using sourceIp
   String sourceIp;
   String username; // spoof user, optional
@@ -28,6 +30,7 @@ class Profile {
     this.hmacKey = '',
     this.hmacDigest = 'sha256',
     this.rawKey = false,
+    this.rawHmacKey = false,
     this.autoSource = true,
     this.sourceIp = '',
     this.username = '',
@@ -45,6 +48,7 @@ class Profile {
         'hmacKey': hmacKey,
         'hmacDigest': hmacDigest,
         'rawKey': rawKey,
+        'rawHmacKey': rawHmacKey,
         'autoSource': autoSource,
         'sourceIp': sourceIp,
         'username': username,
@@ -62,6 +66,9 @@ class Profile {
         hmacKey: j['hmacKey'] as String? ?? '',
         hmacDigest: j['hmacDigest'] as String? ?? 'sha256',
         rawKey: j['rawKey'] as bool? ?? false,
+        // Before the flags were split, one rawKey covered both keys, so a
+        // profile saved then must keep decoding its HMAC key as raw.
+        rawHmacKey: j['rawHmacKey'] as bool? ?? j['rawKey'] as bool? ?? false,
         autoSource: j['autoSource'] as bool? ?? true,
         sourceIp: j['sourceIp'] as String? ?? '',
         username: j['username'] as String? ?? '',
@@ -70,17 +77,44 @@ class Profile {
       );
 }
 
-const _prefsKey = 'profiles';
+const _storageKey = 'profiles';
+
+/// Profiles hold the KEY/HMAC_KEY that open a firewall, so they live in the
+/// platform keystore/keychain rather than plaintext preferences.
+/// `first_unlock_this_device` + non-synchronizable keeps them off iCloud
+/// Keychain and off a migrated device.
+const _secure = FlutterSecureStorage(
+  aOptions: AndroidOptions(),
+  iOptions: IOSOptions(
+    accessibility: KeychainAccessibility.first_unlock_this_device,
+  ),
+);
+
+List<Profile> _decode(String raw) => (jsonDecode(raw) as List)
+    .map((e) => Profile.fromJson(e as Map<String, dynamic>))
+    .toList();
+
+/// Reads the stored profiles, migrating a pre-secure-storage plaintext copy.
+///
+/// The legacy copy must be deleted even when it is not migrated: leaving it
+/// behind would keep the keys readable on disk, defeating the move.
+Future<String?> _readStored() async {
+  final stored = await _secure.read(key: _storageKey);
+
+  final prefs = await SharedPreferences.getInstance();
+  final legacy = prefs.getString(_storageKey);
+  if (legacy == null) return stored;
+  await prefs.remove(_storageKey);
+  if (stored != null) return stored;
+
+  await _secure.write(key: _storageKey, value: legacy);
+  return legacy;
+}
 
 Future<List<Profile>> loadProfiles() async {
-  final prefs = await SharedPreferences.getInstance();
-  final list = (jsonDecode(prefs.getString(_prefsKey) ?? '[]') as List)
-      .map((e) => Profile.fromJson(e as Map<String, dynamic>))
-      .toList();
-  return list;
+  final raw = await _readStored();
+  return raw == null ? [] : _decode(raw);
 }
 
-Future<void> saveProfiles(List<Profile> profiles) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_prefsKey, jsonEncode(profiles));
-}
+Future<void> saveProfiles(List<Profile> profiles) =>
+    _secure.write(key: _storageKey, value: jsonEncode(profiles));

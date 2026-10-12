@@ -137,10 +137,8 @@ void main() {
     );
   });
 
+  const exe = '/usr/local/bin/fwknop';
   test('interop: decode a packet built by the real fwknop CLI', () {
-    const exe = '/usr/local/bin/fwknop';
-    if (!File(exe).existsSync()) return; // skip when not installed
-
     final keyB64 = base64Encode(utf8.encode('0123456789abcdef01234567'));
     final hmacB64 = base64Encode(utf8.encode('abcdefghijklmnopqrstuvwxyz012345'));
     for (final entry in hashes.entries) {
@@ -163,5 +161,5 @@ void main() {
       expect(d['timeout'], '300');
       File(out).deleteSync();
     }
-  });
+  }, skip: File(exe).existsSync() ? null : 'fwknop CLI not found at $exe');
 }

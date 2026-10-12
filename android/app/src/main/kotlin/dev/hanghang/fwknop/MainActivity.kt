@@ -1,4 +1,4 @@
-package com.example.fwknop
+package dev.hanghang.fwknop
 
 import io.flutter.embedding.android.FlutterActivity
 

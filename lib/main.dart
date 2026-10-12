@@ -19,30 +19,56 @@ class FwknopApp extends StatelessWidget {
       );
 }
 
+/// A send failure worth showing the user verbatim. `toString()` returns just
+/// the message so `'Send failed: $e'` stays readable.
+class SpaException implements Exception {
+  SpaException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// Returns the provider's answer, or null when it is not a usable address: a
+/// proxy or captive-portal error page must not become the SPA source IP, or the
+/// packet is sent for the wrong address and still reports success.
+Future<String?> _fetchExternalIp(HttpClient client, String url) async {
+  final res = await client.getUrl(Uri.parse(url)).then((req) => req.close());
+  final body = await res.transform(utf8.decoder).join();
+  if (res.statusCode != HttpStatus.ok) return null;
+  final ip = body.trim();
+  return InternetAddress.tryParse(ip) == null ? null : ip;
+}
+
 /// Resolve this device's external IP (like fwknop's -R option).
 Future<String> resolveExternalIp() async {
   for (final url in [
     'https://api.ipify.org',
     'https://icanhazip.com',
   ]) {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
-      final req = await client.getUrl(Uri.parse(url));
-      final res = await req.close();
-      final body = await res.transform(utf8.decoder).join();
-      client.close();
-      final ip = body.trim();
-      if (ip.isNotEmpty) return ip;
-    } catch (_) {}
+      // connectionTimeout only bounds connect, not a stalled response.
+      final ip = await _fetchExternalIp(client, url)
+          .timeout(const Duration(seconds: 10));
+      if (ip != null) return ip;
+    } catch (_) {
+    } finally {
+      client.close(force: true);
+    }
   }
-  throw 'Could not resolve external IP. Set the source IP manually.';
+  throw SpaException(
+      'Could not resolve external IP. Set the source IP manually.');
 }
 
 Future<void> sendSpa(Profile p) async {
   final key = decodeKey(p.key, raw: p.rawKey);
-  final hmac = p.useHmac ? decodeKey(p.hmacKey, raw: p.rawKey) : null;
+  final hmac = p.useHmac ? decodeKey(p.hmacKey, raw: p.rawHmacKey) : null;
   final sourceIp = p.autoSource ? await resolveExternalIp() : p.sourceIp.trim();
-  if (sourceIp.isEmpty) throw 'No source IP (enable auto-resolve or set one).';
+  if (sourceIp.isEmpty) {
+    throw SpaException('No source IP (enable auto-resolve or set one).');
+  }
 
   final packet = buildSpaPacket(
     sourceIp: sourceIp,
@@ -55,8 +81,17 @@ Future<void> sendSpa(Profile p) async {
     hmacDigest: p.hmacDigest,
   );
 
-  final addr = (await InternetAddress.lookup(p.host.trim())).first;
-  final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+  // send() fails if the socket family does not match the destination, so pick
+  // an address first (IPv4 where available) and bind the matching wildcard.
+  final addrs = await InternetAddress.lookup(p.host.trim());
+  final addr = addrs.firstWhere((a) => a.type == InternetAddressType.IPv4,
+      orElse: () => addrs.first);
+  final socket = await RawDatagramSocket.bind(
+    addr.type == InternetAddressType.IPv6
+        ? InternetAddress.anyIPv6
+        : InternetAddress.anyIPv4,
+    0,
+  );
   try {
     socket.send(utf8.encode(packet), addr, p.port);
   } finally {
@@ -86,21 +121,30 @@ class _ProfileListPageState extends State<ProfileListPage> {
 
   Future<void> _send(Profile p) async {
     final messenger = ScaffoldMessenger.of(context);
-    showDialog(
+    // Dismissible so a stalled IP resolve can be backed out of. Popping via the
+    // dialog's own context is what keeps a user-dismissed dialog from taking the
+    // profile list down with it.
+    BuildContext? dialog;
+    showDialog<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+      barrierDismissible: true,
+      builder: (ctx) {
+        dialog = ctx;
+        return const Center(child: CircularProgressIndicator());
+      },
     );
+
+    String message;
     try {
       await sendSpa(p);
-      if (!mounted) return;
-      Navigator.pop(context); // dismiss spinner
-      messenger.showSnackBar(SnackBar(content: Text('SPA packet sent to ${p.host}:${p.port}')));
+      message = 'SPA packet sent to ${p.host}:${p.port}';
     } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context);
-      messenger.showSnackBar(SnackBar(content: Text('Send failed: $e')));
+      message = 'Send failed: $e';
     }
+    if (!mounted) return;
+    final progress = dialog;
+    if (progress != null && progress.mounted) Navigator.pop(progress);
+    messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
   // docs/features.md: long-press item -> popup menu -> duplicate profile
@@ -153,10 +197,25 @@ class _ProfileListPageState extends State<ProfileListPage> {
                     itemBuilder: (_, i) {
                       final p = _profiles[i];
                       return Dismissible(
-                        key: ValueKey('${p.name}$i'),
+                        key: ObjectKey(p),
                         onDismissed: (_) {
-                          setState(() => _profiles.removeAt(i));
+                          final at = _profiles.indexOf(p);
+                          setState(() => _profiles.removeAt(at));
                           saveProfiles(_profiles);
+                          // Keys are hard to recreate, so make this reversible.
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text('Deleted "${p.name}"'),
+                            action: SnackBarAction(
+                              label: 'Undo',
+                              onPressed: () {
+                                if (!mounted) return;
+                                final index =
+                                    at > _profiles.length ? _profiles.length : at;
+                                setState(() => _profiles.insert(index, p));
+                                saveProfiles(_profiles);
+                              },
+                            ),
+                          ));
                         },
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
@@ -237,7 +296,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     // fail early on unusable keys
     try {
       decodeKey(_p.key, raw: _p.rawKey);
-      if (_p.useHmac) decodeKey(_p.hmacKey, raw: _p.rawKey);
+      if (_p.useHmac) decodeKey(_p.hmacKey, raw: _p.rawHmacKey);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
       return;
@@ -247,7 +306,8 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
   Widget _field(String label, TextEditingController c,
           {String? hint, bool required = false, bool obscure = false,
-          TextInputType type = TextInputType.text, String? toggleKey}) {
+          TextInputType type = TextInputType.text, String? toggleKey,
+          int? min, int? max}) {
     final hidden = obscure && !_revealed.contains(toggleKey);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -269,9 +329,18 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                       : _revealed.remove(toggleKey)),
                 ),
         ),
-        validator: required
-            ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
-            : null,
+        // A numeric keyboard still accepts pasted text, so validate before
+        // _save() parses these.
+        validator: (v) {
+          final text = v?.trim() ?? '';
+          if (text.isEmpty) return required ? 'Required' : null;
+          if (min == null && max == null) return null;
+          final n = int.tryParse(text);
+          if (n == null) return 'Must be a whole number';
+          if (min != null && n < min) return 'Must be at least $min';
+          if (max != null && n > max) return 'Must be at most $max';
+          return null;
+        },
       ),
     );
   }
@@ -287,11 +356,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         body: Form(
           key: _form,
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            // An explicit padding stops ScrollView from applying MediaQuery
+            // padding itself, so the nav-bar inset must be added by hand.
+            padding: EdgeInsets.fromLTRB(
+                16, 16, 16, 16 + MediaQuery.paddingOf(context).bottom),
             children: [
               _field('Name', _name, required: true),
               _field('Server (IP or hostname)', _host, required: true),
-              _field('UDP port', _port, type: TextInputType.number, required: true),
+              _field('UDP port', _port, type: TextInputType.number, required: true,
+                  min: 1, max: 65535),
               _field('Access request', _access, hint: 'tcp/22', required: true),
               _field('Key (base64, like access.conf KEY)', _key, obscure: true, required: true, toggleKey: 'key'),
               SwitchListTile(
@@ -306,7 +379,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: DropdownButtonFormField<String>(
-                    value: _p.hmacDigest,
+                    initialValue: _p.hmacDigest,
                     decoration: const InputDecoration(
                       labelText: 'HMAC digest type',
                       border: OutlineInputBorder(),
@@ -319,11 +392,19 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                   ),
                 ),
               SwitchListTile(
-                title: const Text('Keys are raw ASCII'),
+                title: const Text('Key is raw ASCII'),
                 subtitle: const Text('Off = base64 (fwknop default)'),
                 value: _p.rawKey,
                 onChanged: (v) => setState(() => _p.rawKey = v),
               ),
+              // fwknop has independent KEY/KEY_BASE64 and HMAC_KEY/
+              // HMAC_KEY_BASE64, so the two keys can differ in encoding.
+              if (_p.useHmac)
+                SwitchListTile(
+                  title: const Text('HMAC key is raw ASCII'),
+                  value: _p.rawHmacKey,
+                  onChanged: (v) => setState(() => _p.rawHmacKey = v),
+                ),
               SwitchListTile(
                 title: const Text('Auto-resolve source IP'),
                 subtitle: const Text('Queries your public IP before sending'),
@@ -334,7 +415,8 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                 _field('Source IP', _sourceIp, required: true),
               _field('Username (spoof user, optional)', _username),
               _field('NAT access (optional)', _natAccess, hint: '192.168.1.10,22'),
-              _field('Firewall timeout seconds (optional)', _timeout, type: TextInputType.number),
+              _field('Firewall timeout seconds (optional)', _timeout,
+                  type: TextInputType.number, min: 1),
             ],
           ),
         ),

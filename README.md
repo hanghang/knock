@@ -34,6 +34,41 @@ Verified against the real toolchain (`flutter test`):
 ## Build
 ```sh
 flutter test
-flutter build apk        # Android
-flutter build ios        # iOS (needs full Xcode)
+flutter build apk --split-per-abi   # Android (minSdk 30)
+flutter build ios                   # iOS (needs full Xcode)
 ```
+
+`--split-per-abi` writes `app-{armeabi-v7a,arm64-v8a,x86_64}-release.apk` to
+`build/app/outputs/flutter-apk/` rather than one universal APK. Native libraries
+are ~94% of the download and are stored uncompressed (`extractNativeLibs` is
+false at minSdk 23+), so splitting is the main size lever:
+
+| APK | size | versionCode |
+|---|---|---|
+| `app-arm64-v8a-release.apk` | 19.2 MB | 2001 |
+| `app-armeabi-v7a-release.apk` | 16.7 MB | 1001 |
+| `app-x86_64-release.apk` | 20.7 MB | 4001 |
+
+Install the arm64-v8a APK on any modern device. Flutter adds `1000 * ABI_VERSION`
+to the pubspec version code for split APKs, hence the codes above. For a Play
+upload use `flutter build appbundle`, which lets the store serve per-device
+splits.
+
+Building requires Flutter 3.47+ (targetSdk 36), which in turn requires Gradle
+9.3.1, AGP 9.1.0, Kotlin 2.4.0 and Java 17. The Android NDK matching
+`flutter.ndkVersion` is downloaded automatically on first build.
+
+## Storage & privacy
+Profiles — including the `KEY` / `HMAC_KEY` from `access.conf` — are stored
+only on the device, in Android Keystore-backed encrypted storage or the iOS
+Keychain (non-migratable, not synced to iCloud Keychain). Android cloud backup
+and device-to-device transfer are disabled so keys are never uploaded.
+
+The one third-party disclosure is public-IP resolution: with "Auto-resolve
+source IP" on (the default), the app queries `api.ipify.org` / `icanhazip.com`
+before sending. Turn it off and set a source IP manually to avoid that.
+See [PRIVACY.md](PRIVACY.md).
+
+## License
+MIT — see [LICENSE](LICENSE). This is a clean-room Dart implementation of the
+FKO wire protocol; it does not link or bundle `libfko` (which is GPL-2).
